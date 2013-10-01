@@ -54,8 +54,7 @@ already an instance of `c`."
         m-syn (Method. "get" t-obj (->Types []))
         cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)]
     (doto cw
-      (.visit (bit-or Opcodes/V1_6 1) ;; Not sure what flag 1 is :-/
-              (bit-or Opcodes/ACC_PUBLIC Opcodes/ACC_SUPER)
+      (.visit Opcodes/V1_6 (bit-or Opcodes/ACC_PUBLIC Opcodes/ACC_SUPER)
               iname (class-signature rtype) "java/lang/Object"
               (into-array String ["javax/inject/Provider"]))
       (-> (.visitField (bit-or Opcodes/ACC_PRIVATE Opcodes/ACC_FINAL)

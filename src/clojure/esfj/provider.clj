@@ -1,6 +1,4 @@
-(ns esfj.core
-  (:refer-clojure :exclude [gen-class])
-  (:require [shady.gen-class :refer [gen-class]])
+(ns esfj.provider
   (:import [clojure.asm Opcodes Type ClassWriter]
            [clojure.asm.commons Method GeneratorAdapter]
            [clojure.lang DynamicClassLoader IFn RT Symbol Var]
@@ -10,6 +8,13 @@
   "Coerce `x` to be of class `c` by applying `f` to it iff `x` isn't
 already an instance of `c`."
   [c f x] (if (instance? c x) x (f x)))
+
+(defn ^:private ->Class*
+  [c] (or (ns-resolve *ns* (symbol c))
+          (RT/classForName (str c))))
+
+(defn ^:private ->Class
+  [c] (coerce Class ->Class* c))
 
 (defn ^:private self-type
   [sym]
@@ -37,16 +42,14 @@ already an instance of `c`."
 (defn ^:private invoke-method
   [n] (asm-method "invoke" Object (repeat n Object)))
 
-(defn ^:private make-provider
-  [impl-ns impl-var cname rtype atypes]
-  (let [[impl-ns impl-var cname] (map str [impl-ns impl-var cname])
-        [t-obj t-ifn t-rt t-sym t-var t-ret]
-        , (map ->Type [Object IFn RT Symbol Var rtype])
+(defn ^:private generate-provider
+  [cname rtype atypes]
+  (let [rtype (->Class rtype), atypes (map ->Class atypes)
+        [t-obj t-ifn t-ret] (map ->Type [Object IFn rtype])
         t-self (self-type cname), iname (.getInternalName t-self)
-        atypes (->Types atypes)
+        atypes (->Types (cons IFn atypes))
         m-base (Method/getMethod "void <init>()")
         m-init (Method. "<init>" Type/VOID_TYPE atypes)
-        m-clinit (Method/getMethod "void <clinit>()")
         m-get (Method. "get" t-ret (->Types []))
         m-syn (Method. "get" t-obj (->Types []))
         cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)]
@@ -55,36 +58,19 @@ already an instance of `c`."
               (bit-or Opcodes/ACC_PUBLIC Opcodes/ACC_SUPER)
               iname (class-signature rtype) "java/lang/Object"
               (into-array String ["javax/inject/Provider"]))
-      (-> (.visitField (bit-or Opcodes/ACC_PRIVATE Opcodes/ACC_FINAL
-                               Opcodes/ACC_STATIC)
-                       "FACTORY" "Lclojure/lang/IFn;" nil nil)
-          (.visitEnd))
       (-> (.visitField (bit-or Opcodes/ACC_PRIVATE Opcodes/ACC_FINAL)
                        "factory" "Lclojure/lang/IFn;" nil nil)
           (.visitEnd)))
-    (doto (GeneratorAdapter. Opcodes/ACC_STATIC m-clinit nil nil cw)
-      (.visitCode)
-      (.visitLdcInsn "clojure.core")
-      (.visitLdcInsn "require")
-      (.invokeStatic t-rt (asm-method "var" Var [String String]))
-      (.visitLdcInsn impl-ns)
-      (.invokeStatic t-sym (asm-method "intern" Symbol [String]))
-      (.invokeVirtual t-var (invoke-method 1))
-      (.pop)
-      (.visitLdcInsn impl-ns)
-      (.visitLdcInsn impl-var)
-      (.invokeStatic t-rt (asm-method "var" Var [String String]))
-      (.putStatic t-self "FACTORY" t-ifn))
     (doto (GeneratorAdapter. Opcodes/ACC_PUBLIC m-init nil nil cw)
       (-> (.visitAnnotation "Ljavax/inject/Inject;" true) (.visitEnd))
-      (-> (.visitParameterAnnotation 0 "Lesfj/Factory;" true) (.visitEnd))
+      (-> (.visitParameterAnnotation 0 "Lesfj/provider/Factory;" true)
+          (.visitEnd))
       (.visitCode)
       (.loadThis)
       (.invokeConstructor t-obj m-base)
       (.loadThis)
-      (.getStatic t-self "FACTORY" t-ifn)
       (.loadArgs)
-      (.invokeInterface t-ifn (-> atypes count invoke-method))
+      (.invokeInterface t-ifn (-> atypes count dec invoke-method))
       (.checkCast t-ifn)
       (.putField t-self "factory" t-ifn)
       (.returnValue)
@@ -106,14 +92,26 @@ already an instance of `c`."
       (.returnValue)
       (.endMethod))
     (.visitEnd cw)
-    (with-open [outs (clojure.java.io/output-stream "Example1.class")]
-      (.write outs (.toByteArray cw)))
-    #_(.defineClass ^DynamicClassLoader (deref clojure.lang.Compiler/LOADER)
-                    (str cname) (.toByteArray cw) nil)))
+    (.toByteArray cw)))
 
-(comment
- (defn ^:private signature
-   [cname]
-   (let [sw (doto (SignatureWriter.) (.visitClassType cname))
-         sv (.visitInterface sw)]
-     sw)))
+(defmacro gen-provider
+  [cname rtype atypes]
+  (let [bytecode (generate-provider cname rtype atypes)]
+    (if *compile-files*
+      (clojure.lang.Compiler/writeClassFile cname bytecode)
+      (.defineClass ^DynamicClassLoader (deref clojure.lang.Compiler/LOADER)
+                    (str cname) bytecode nil))))
+
+(defmacro defprovider
+  "Creates a new Java class implementing the JSR-330 `Provider`
+interface for the class `rtype`.  The created class has a single
+constructor which accepts an `IFn` factory-factory parameter followed
+by parameter of the types provided in `atypes`.  The constructor is
+annotated with the `Inject` annotation and the `IFn` parameter is
+annotated with the `esfj.provider.Factory` `Qualifier` annotation."
+  [name rtype atypes]
+  (let [cname (-> (namespace-munge *ns*) (str "." name) symbol
+                  (with-meta (meta name)))]
+    `(do
+       (gen-provider ~cname ~rtype ~atypes)
+       (import ~cname))))

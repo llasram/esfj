@@ -2,8 +2,8 @@
   (:require [clojure.test :refer :all]
             [esfj.provider :refer [defprovider]])
   (:import [clojure.lang IFn IDeref]
-           [esfj.provider Factory]
-           [org.grouplens.grapht InjectorBuilder Module]))
+           [org.grouplens.grapht InjectorBuilder Module]
+           [esfj.provider Factory]))
 
 (definterface ExampleMarker)
 

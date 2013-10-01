@@ -1,4 +1,4 @@
-(defproject org.platypope/esfj "0.1.0"
+(defproject org.platypope/esfj "0.1.1-SNAPSHOT"
   :description "A Clojure library for defining JSR-330 Provider classes."
   :url "http://github.com/llasram/esfj"
   :license {:name "Eclipse Public License"

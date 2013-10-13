@@ -1,7 +1,7 @@
 (ns esfj.provider
   (:import [clojure.asm Opcodes Type ClassWriter]
            [clojure.asm.commons Method GeneratorAdapter]
-           [clojure.lang DynamicClassLoader IFn RT Symbol Var]
+           [clojure.lang DynamicClassLoader IFn IDeref RT Symbol Var]
            [javax.inject Provider]))
 
 (defn ^:private coerce
@@ -45,39 +45,47 @@ already an instance of `c`."
 (defn ^:private generate-provider
   [cname rtype atypes]
   (let [rtype (->Class rtype), atypes (map ->Class atypes)
-        [t-obj t-ifn t-ret] (map ->Type [Object IFn rtype])
+        [t-obj t-ifn t-ideref t-ret] (map ->Type [Object IFn IDeref rtype])
         t-self (self-type cname), iname (.getInternalName t-self)
-        atypes (->Types (cons IFn atypes))
+        atypes (->Types atypes)
+        m-clinit (Method/getMethod "void <clinit>()")
         m-base (Method/getMethod "void <init>()")
         m-init (Method. "<init>" Type/VOID_TYPE atypes)
+        m-deref (Method/getMethod "Object deref()")
         m-get (Method. "get" t-ret (->Types []))
         m-syn (Method. "get" t-obj (->Types []))
+        f-construct "__construct", f-get "__get"
         cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)]
     (doto cw
       (.visit Opcodes/V1_6 (bit-or Opcodes/ACC_PUBLIC Opcodes/ACC_SUPER)
               iname (class-signature rtype) "java/lang/Object"
               (into-array String ["javax/inject/Provider"]))
+      (-> (.visitField (bit-or Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC
+                               Opcodes/ACC_FINAL)
+                       f-construct "Lclojure/lang/IDeref;" nil nil)
+          (.visitEnd))
       (-> (.visitField (bit-or Opcodes/ACC_PRIVATE Opcodes/ACC_FINAL)
-                       "factory" "Lclojure/lang/IFn;" nil nil)
+                       f-get "Lclojure/lang/IFn;" nil nil)
           (.visitEnd)))
     (doto (GeneratorAdapter. Opcodes/ACC_PUBLIC m-init nil nil cw)
       (-> (.visitAnnotation "Ljavax/inject/Inject;" true) (.visitEnd))
-      (-> (.visitParameterAnnotation 0 "Lesfj/provider/Factory;" true)
-          (.visitEnd))
       (.visitCode)
       (.loadThis)
       (.invokeConstructor t-obj m-base)
       (.loadThis)
-      (.loadArgs)
-      (.invokeInterface t-ifn (-> atypes count dec invoke-method))
+      (.getStatic t-self f-construct t-ideref)
+      (.invokeInterface t-ideref m-deref)
       (.checkCast t-ifn)
-      (.putField t-self "factory" t-ifn)
+      (.loadArgs)
+      (.invokeInterface t-ifn (-> atypes count invoke-method))
+      (.checkCast t-ifn)
+      (.putField t-self f-get t-ifn)
       (.returnValue)
       (.endMethod))
     (doto (GeneratorAdapter. Opcodes/ACC_PUBLIC m-get nil nil cw)
       (.visitCode)
       (.loadThis)
-      (.getField t-self "factory" t-ifn)
+      (.getField t-self f-get t-ifn)
       (.invokeInterface t-ifn (invoke-method 0))
       (.checkCast t-ret)
       (.returnValue)
@@ -88,6 +96,16 @@ already an instance of `c`."
       (.visitCode)
       (.loadThis)
       (.invokeVirtual t-self m-get)
+      (.returnValue)
+      (.endMethod))
+    (doto (GeneratorAdapter. Opcodes/ACC_STATIC m-clinit nil nil cw)
+      (.visitCode)
+      (.push "clojure.core")
+      (.push "promise")
+      (.invokeStatic (->Type RT) (asm-method "var" Var [String String]))
+      (.invokeVirtual (->Type Var) (invoke-method 0))
+      (.checkCast t-ideref)
+      (.putStatic t-self f-construct t-ideref)
       (.returnValue)
       (.endMethod))
     (.visitEnd cw)
@@ -101,16 +119,29 @@ already an instance of `c`."
       (.defineClass ^DynamicClassLoader (deref clojure.lang.Compiler/LOADER)
                     (str cname) bytecode nil))))
 
-(defmacro defprovider
-  "Creates a new Java class implementing the JSR-330 `Provider`
-interface for the class `rtype`.  The created class has a single
-constructor which accepts an `IFn` factory-factory parameter followed
-by parameter of the types provided in `atypes`.  The constructor is
-annotated with the `Inject` annotation and the `IFn` parameter is
-annotated with the `esfj.provider.Factory` `Qualifier` annotation."
-  [name rtype atypes]
-  (let [cname (-> (namespace-munge *ns*) (str "." name) symbol
-                  (with-meta (meta name)))]
+(defn ^:private class-name
+  [] (-> (namespace-munge *ns*) (str "$" (gensym "provider__")) symbol))
+
+(defmacro provider
+  "Define and return an anonymous Provider class which provides an instances of
+`rtype` (a class), is constructed with instances of `atypes` (a vector of
+classes), and is implemented by the function `f`.  The function `f` will be
+called with the `atypes` instances during construction and should return a
+zero-argument function which will be called on each `get`."
+  [rtype atypes f]
+  (let [cname (class-name)]
     `(do
        (gen-provider ~cname ~rtype ~atypes)
+       (deliver ~(symbol (str cname) "__construct") ~f)
        (import ~cname))))
+
+(defmacro fn-provider
+  "Define and return anonymous Provider class using `fn`-like syntax, where
+`params` is a vector of constructor parameters and `body` defines the provider
+`get` implementation.  Metadata on the `params` vector and on each `params`
+member symbol defines the Provider-produced type and constructor argument types
+respectively."
+  [params & body]
+  (let [rtype (-> params meta :tag)
+        atypes (mapv (comp :tag meta) params)]
+    `(provider ~rtype ~atypes (fn ~params (fn [] ~@body)))))

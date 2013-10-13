@@ -6,33 +6,30 @@
 
 (definterface ExampleMarker)
 
+(defn provider-actual
+  [s p ]
+  (-> (doto (InjectorBuilder. (into-array Module []))
+        (-> (.bind ExampleMarker) (.toProvider p))
+        (-> (.at ExampleMarker) (.bind String) (.to s)))
+      .build (.getInstance ExampleMarker) deref))
+
 (deftest test-provider
   (let [expected "ding-ding"
-        bi (doto (InjectorBuilder. (into-array Module []))
-             (-> (.bind ExampleMarker)
-                 (.toProvider (provider
-                               ExampleMarker [String]
-                               (fn [s]
-                                 (constantly
-                                  (reify ExampleMarker
-                                    IDeref (deref [_] s)))))))
-             (-> (.at ExampleMarker)
-                 (doto #_context
-                   (-> (.bind String) (.to expected)))))
-        actual (-> bi .build (.getInstance ExampleMarker) deref)]
+        provider (provider
+                  ExampleMarker [String]
+                  (fn [s]
+                    (constantly
+                     (reify ExampleMarker
+                       IDeref (deref [_] s)))))
+        actual (provider-actual expected provider)]
     (is (= expected actual))))
 
 (deftest test-fn-provider
   (let [expected "yo-yo"
-        bi (doto (InjectorBuilder. (into-array Module []))
-             (-> (.bind ExampleMarker)
-                 (.toProvider (fn-provider
-                               ^ExampleMarker [^String s]
-                               (reify ExampleMarker IDeref (deref [_] s)))))
-             (-> (.at ExampleMarker)
-                 (doto #_context
-                   (-> (.bind String) (.to expected)))))
-        actual (-> bi .build (.getInstance ExampleMarker) deref)]
+        provider (fn-provider
+                  ^ExampleMarker [^String s]
+                  (reify ExampleMarker IDeref (deref [_] s)))
+        actual (provider-actual expected provider)]
     (is (= expected actual))))
 
 (defprovider example-provider
@@ -43,12 +40,7 @@
 
 (deftest test-defprovider
   (let [expected "woe"
-        bi (doto (InjectorBuilder. (into-array Module []))
-             (-> (.bind ExampleMarker) (.toProvider example-provider))
-             (-> (.at ExampleMarker)
-                 (doto #_context
-                   (-> (.bind String) (.to expected)))))
-        actual (-> bi .build (.getInstance ExampleMarker) deref)]
+        actual (provider-actual expected example-provider)]
     (is (= expected actual))))
 
 (defprovider ^:hof hof-provider
@@ -58,10 +50,5 @@
 
 (deftest test-defprovider-hof
   (let [expected "glorm"
-        bi (doto (InjectorBuilder. (into-array Module []))
-             (-> (.bind ExampleMarker) (.toProvider hof-provider))
-             (-> (.at ExampleMarker)
-                 (doto #_context
-                   (-> (.bind String) (.to expected)))))
-        actual (-> bi .build (.getInstance ExampleMarker) deref)]
+        actual (provider-actual expected hof-provider)]
     (is (= expected actual))))

@@ -1,10 +1,26 @@
 (ns esfj.provider-test
   (:require [clojure.test :refer :all]
-            [esfj.provider :refer [fn-provider defprovider]])
+            [esfj.provider :refer [provider fn-provider defprovider]])
   (:import [clojure.lang IFn IDeref]
            [org.grouplens.grapht InjectorBuilder Module]))
 
 (definterface ExampleMarker)
+
+(deftest test-provider
+  (let [expected "ding-ding"
+        bi (doto (InjectorBuilder. (into-array Module []))
+             (-> (.bind ExampleMarker)
+                 (.toProvider (provider
+                               ExampleMarker [String]
+                               (fn [s]
+                                 (constantly
+                                  (reify ExampleMarker
+                                    IDeref (deref [_] s)))))))
+             (-> (.at ExampleMarker)
+                 (doto #_context
+                   (-> (.bind String) (.to expected)))))
+        actual (-> bi .build (.getInstance ExampleMarker) deref)]
+    (is (= expected actual))))
 
 (deftest test-fn-provider
   (let [expected "yo-yo"

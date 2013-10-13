@@ -111,37 +111,59 @@ already an instance of `c`."
     (.visitEnd cw)
     (.toByteArray cw)))
 
-(defmacro gen-provider
+(defn ^:internal gen-provider
   [cname rtype atypes]
-  (let [bytecode (generate-provider cname rtype atypes)]
-    (if *compile-files*
-      (clojure.lang.Compiler/writeClassFile cname bytecode)
-      (.defineClass ^DynamicClassLoader (deref clojure.lang.Compiler/LOADER)
-                    (str cname) bytecode nil))))
+  (let [bytecode (generate-provider cname rtype atypes)
+        dcl ^DynamicClassLoader (RT/makeClassLoader)]
+    (.defineClass dcl (str cname) bytecode nil)))
 
 (defn ^:private class-name
-  [] (-> (namespace-munge *ns*) (str "$" (gensym "provider__")) symbol))
+  [cname]
+  (-> (namespace-munge *ns*)
+      (str "$" (gensym "provider") "$" (munge cname))
+      symbol))
 
-(defmacro provider
+(defn provider
   "Define and return an anonymous Provider class which provides an instances of
 `rtype` (a class), is constructed with instances of `atypes` (a vector of
 classes), and is implemented by the function `f`.  The function `f` will be
 called with the `atypes` instances during construction and should return a
 zero-argument function which will be called on each `get`."
-  [rtype atypes f]
-  (let [cname (class-name)]
-    `(do
-       (gen-provider ~cname ~rtype ~atypes)
-       (deliver ~(symbol (str cname) "__construct") ~f)
-       (import ~cname))))
+  {:tag `Class}
+  ([rtype atypes f] (provider (gensym "provider__") rtype atypes f))
+  ([cname rtype atypes f]
+     (let [cname (class-name cname)]
+       (let [^Class klass (gen-provider cname rtype atypes)
+             construct (-> klass (.getField "__construct") (.get nil))]
+         (deliver construct f)
+         klass))))
 
 (defmacro fn-provider
   "Define and return anonymous Provider class using `fn`-like syntax, where
 `params` is a vector of constructor parameters and `body` defines the provider
-`get` implementation.  Metadata on the `params` vector and on each `params`
-member symbol defines the Provider-produced type and constructor argument types
-respectively."
+`get` implementation.  The `:tag` metadata on the `params` vector and on each
+`params` member symbol defines the Provider-produced type and constructor
+argument types respectively."
   [params & body]
   (let [rtype (-> params meta :tag)
-        atypes (mapv (comp :tag meta) params)]
+        atypes (mapv (comp :tag meta) params)
+        params (vary-meta params dissoc :tag)
+        fdecl (if (-> params meta :hof)
+                `(fn ~params ~@body)
+                `(fn ~params (fn [] ~@body)))]
     `(provider ~rtype ~atypes (fn ~params (fn [] ~@body)))))
+
+(defmacro defprovider
+  {:arglists '([name doc-string? attr-map? [params*] & body])}
+  [name & forms]
+  (let [[[doc attrs] [params & body]] (split-with (complement vector?) forms)
+        attrs (-> (meta name) (merge attrs) (cond-> doc (assoc :doc doc)))
+        rtype (or (-> attrs :tag) (-> params meta :tag) (-> name meta :tag))
+        atypes (mapv (comp :tag meta) params)
+        params (vary-meta params dissoc :tag)
+        name (vary-meta name merge (assoc attrs :tag `Class))
+        fdecl (if (:hof attrs)
+                `(fn ~params ~@body)
+                `(fn ~params (fn [] ~@body)))]
+    `(def ~name
+       (provider '~name ~rtype ~atypes ~fdecl))))

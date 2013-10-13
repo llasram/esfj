@@ -7,7 +7,7 @@
 (definterface ExampleMarker)
 
 (defn provider-actual
-  [s p ]
+  [^String s ^Class p]
   (-> (doto (InjectorBuilder. (into-array Module []))
         (-> (.bind ExampleMarker) (.toProvider p))
         (-> (.at ExampleMarker) (.bind String) (.to s)))

@@ -17,6 +17,7 @@ already an instance of `c`."
   [c] (coerce Class ->Class* c))
 
 (defn ^:private self-type
+  {:tag `Type}
   [sym]
   (let [iname (-> sym str (.replace \. \/))]
     (Type/getType (str "L" iname ";"))))
@@ -29,7 +30,7 @@ already an instance of `c`."
 
 (defn ^:private ->Type
   {:tag `Type}
-  [x] (coerce Type #(Type/getType %) x))
+  [x] (coerce Type #(Type/getType ^Class %) x))
 
 (defn ^:private ->Types
   {:tag "[Lclojure.asm.Type;"}

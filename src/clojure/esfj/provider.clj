@@ -155,6 +155,8 @@ argument types respectively."
     `(provider ~rtype ~atypes ~fdecl)))
 
 (defmacro defprovider
+  "Like `defn`, but for providers as per `fn-provider`.  The resulting var will
+hold a reference to the defined Provider class."
   {:arglists '([name doc-string? attr-map? [params*] & body])}
   [name & forms]
   (let [[[doc attrs] [params & body]] (split-with (complement vector?) forms)

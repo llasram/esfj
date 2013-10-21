@@ -152,7 +152,7 @@ argument types respectively."
         fdecl (if (-> params meta :hof)
                 `(fn ~params ~@body)
                 `(fn ~params (fn [] ~@body)))]
-    `(provider ~rtype ~atypes (fn ~params (fn [] ~@body)))))
+    `(provider ~rtype ~atypes ~fdecl)))
 
 (defmacro defprovider
   {:arglists '([name doc-string? attr-map? [params*] & body])}
